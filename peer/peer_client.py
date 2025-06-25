@@ -213,9 +213,14 @@ def main():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    from utils.config import detect_local_ip
-    default_host = os.environ.get('PEER_HOST', detect_local_ip())
-    parser.add_argument('--host', default=default_host, help='IP para escutar conexoes TCP')
+    from utils.config import detect_local_ip, set_tracker_address, TRACKER_HOST, TRACKER_PORT
+    peer_host = '0.0.0.0'
+    parser.add_argument('--tracker', default=f'{TRACKER_HOST}:{TRACKER_PORT}', help='Endereco do tracker no formato IP:PORT')
     args = parser.parse_args()
-    peer_host = args.host
+    host_port = args.tracker
+    if ':' in host_port:
+        t_host, t_port = host_port.split(':', 1)
+        set_tracker_address(t_host, int(t_port))
+    else:
+        set_tracker_address(host_port, TRACKER_PORT)
     main()

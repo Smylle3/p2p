@@ -8,7 +8,7 @@ import sys
 # Garanta que o diretório pai esteja no PYTHONPATH para permitir "import utils"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from auth_manager import register_user, authenticate_user, log
+from auth_manager import register_user, authenticate_user, log, users_db
 from utils.config import TRACKER_HOST, TRACKER_PORT
 
 # --- ESTRUTURAS DE DADOS ---
@@ -28,6 +28,37 @@ peer_scores = {}
 # Armazena salas de chat
 # formato: { room_name: {"moderator": str, "address": "ip:port", "members": [usernames] } }
 chat_rooms = {}
+
+# Arquivo para persistir dados entre reinicios
+STATE_FILE = os.path.join(os.path.dirname(__file__), 'tracker_state.json')
+POPULATE_FILE = os.path.join(os.path.dirname(__file__), '..', 'populate', 'tracker_state.json')
+
+
+def load_state():
+    """Carrega dados persistidos ou usa o arquivo de populacao como base."""
+    source = None
+    if os.path.exists(STATE_FILE) and os.path.getsize(STATE_FILE) > 2:
+        source = STATE_FILE
+    elif os.path.exists(POPULATE_FILE):
+        source = POPULATE_FILE
+    if source:
+        with open(source, 'r') as f:
+            data = json.load(f)
+            users_db.update(data.get('users', {}))
+            peer_scores.update(data.get('scores', {}))
+            chat_rooms.update(data.get('rooms', {}))
+        if source == POPULATE_FILE:
+            save_state()
+
+
+def save_state():
+    data = {
+        'users': users_db,
+        'scores': peer_scores,
+        'rooms': chat_rooms,
+    }
+    with open(STATE_FILE, 'w') as f:
+        json.dump(data, f)
 
 # Endereço do tracker definido em config.json
 HOST, PORT = TRACKER_HOST, TRACKER_PORT
@@ -71,6 +102,7 @@ def handle_request(conn, addr):
             ok, msg = register_user(request['username'], request['password'])
             if ok:
                 initialize_peer_score(request['username'])
+                save_state()
             log(f"Registro de usuário '{request['username']}': {msg}", "INFO")
             response = {"status": ok, "message": msg}
 
@@ -100,6 +132,8 @@ def handle_request(conn, addr):
                 user_stats["uptime_seconds"] = user_stats.get("uptime_seconds", 0) + uptime_seconds
                 user_stats["score"] = calculate_score(user_stats)
                 peer_scores[username] = user_stats
+
+                save_state()
 
                 # Remove o peer dos ativos e de todos os arquivos que ele sediava
                 del active_peers[peer_key]
@@ -153,6 +187,7 @@ def handle_request(conn, addr):
                 peer_scores[username]["uploads"] += 1
                 peer_scores[username]["score"] = calculate_score(peer_scores[username])
                 log(f"Ponto de upload registrado para '{username}'. Nova pontuação: {peer_scores[username]['score']}", "SUCCESS")
+                save_state()
                 response = {"status": True}
             else:
                 response = {"status": False, "message": "Usuário não encontrado para premiar."}
@@ -184,6 +219,7 @@ def handle_request(conn, addr):
                     "members": []
                 }
                 log(f"Sala '{room}' criada pelo moderador {username}", "INFO")
+                save_state()
                 response = {"status": True}
 
         elif action == "list_rooms":
@@ -194,6 +230,7 @@ def handle_request(conn, addr):
             info = chat_rooms.get(room)
             if info and info.get("moderator") == username:
                 del chat_rooms[room]
+                save_state()
                 response = {"status": True}
             else:
                 response = {"status": False, "message": "Sala nao encontrada ou permissao negada"}
@@ -211,6 +248,7 @@ def handle_request(conn, addr):
                 if event == "leave" and member in members:
                     members.remove(member)
                     log(f"{member} saiu da sala '{room}'", "INFO")
+                save_state()
                 response = {"status": True}
             else:
                 response = {"status": False, "message": "Sala inexistente"}
@@ -243,4 +281,15 @@ def start_tracker():
         server.close()
 
 if __name__ == "__main__":
+    import argparse
+    from utils.config import set_tracker_address
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--host', default=HOST, help='Endereco para o tracker')
+    parser.add_argument('--port', type=int, default=PORT, help='Porta do tracker')
+    args = parser.parse_args()
+
+    set_tracker_address(args.host, args.port)
+    HOST, PORT = args.host, args.port
+    load_state()
     start_tracker()
