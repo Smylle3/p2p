@@ -13,11 +13,11 @@ Funcionalidades:
 
 ### Requirements
 
-socket
-threading
-json
-hashlib
-os
-time
-datetime
-logging
+- socket
+- threading
+- json
+- hashlib
+- os
+- time
+- datetime
+- logging
