@@ -1,4 +1,3 @@
-
 """Rotinas de download paralelas para arquivos compartilhados."""
 
 import json
@@ -9,7 +8,7 @@ from queue import Queue, Empty  # Estruturas seguras para compartilhar tarefas
 import socket
 from threading import Lock
 from itertools import cycle  # Facilita o rodízio entre os peers disponíveis
-
+import time
 from utils.logger import log
 from utils.chunk_manager import reassemble_chunks
 from .network import send_to_tracker
@@ -54,9 +53,6 @@ class DownloaderThread(threading.Thread):
                 peer_ip, peer_tcp_port = peer_addr_str.split(':')
                 try:
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        
-                        
-                        
                         s.settimeout(20)
                         s.connect((peer_ip, int(peer_tcp_port)))
                         request = {
@@ -67,10 +63,6 @@ class DownloaderThread(threading.Thread):
                         }
                         s.sendall(json.dumps(request).encode())
                         response_parts = []
-                        
-                        
-                        
-                        
                         while True:
                             part = s.recv(4096)
                             if not part:
@@ -78,10 +70,6 @@ class DownloaderThread(threading.Thread):
                             response_parts.append(part)
                     response = b"".join(response_parts)
                     if response and hashlib.sha256(response).hexdigest() == expected_hash:
-                        
-                        
-                        
-                        
                         chunk_path = os.path.join(self.temp_dir, f"chunk_{chunk_index}")
                         with open(chunk_path, "wb") as f:
                             f.write(response)
@@ -89,7 +77,6 @@ class DownloaderThread(threading.Thread):
                         success = True
                         break
                 except Exception as e:
-                    
                     log(f"Nao foi possivel baixar chunk {chunk_index} de {peer_addr_str}: {e}", "ERROR")
                 tried += 1
             if not success:
@@ -100,7 +87,6 @@ class DownloaderThread(threading.Thread):
                     log(f"Recolocando chunk {chunk_index} na fila.", "WARNING")
                     self.chunk_queue.put((chunk_index, expected_hash))
                 else:
-                    
                     log(f"Falha permanente no chunk {chunk_index}", "ERROR")
             self.chunk_queue.task_done()
 
@@ -125,10 +111,6 @@ def download_file(file_name, file_info, username):
 
     file_hash = file_info["hash"]
     chunk_hashes = file_info["chunk_hashes"]
-    
-    
-    
-    
     prioritized_peers = [p["peer"] for p in file_info["peers"]]
 
     if not prioritized_peers:
@@ -150,7 +132,8 @@ def download_file(file_name, file_info, username):
     # trava simples para impedir que duas threads avancem o ciclo ao mesmo tempo
     peer_lock = Lock()
     threads = []
-
+    
+    start_time = time.monotonic()
     for _ in range(min(threads_allowed, len(prioritized_peers))):
         t = DownloaderThread(file_name, chunk_queue, prioritized_peers, temp_dir, username, attempts, lock, peer_cycle, peer_lock)
         t.start()
@@ -167,16 +150,27 @@ def download_file(file_name, file_info, username):
     reassemble_chunks(temp_dir, final_path, len(chunk_hashes))
 
     with open(final_path, "rb") as f:
-        
-        
-        
         final_hash = hashlib.sha256(f.read()).hexdigest()
 
     if final_hash == file_hash:
+        end_time = time.monotonic()
+        duration = end_time - start_time
+        file_size_bytes = file_info.get("size", 0)
+
+        rate_bps = file_size_bytes / duration if duration > 0 else 0
+
+        if rate_bps > (1024 * 1024):
+            rate_str = f"{rate_bps / (1024 * 1024):.2f} MB/s"
+        elif rate_bps > 1024:
+            rate_str = f"{rate_bps / 1024:.2f} KB/s"
+        else:
+            rate_str = f"{rate_bps:.2f} B/s"
+
         log(
             f"Arquivo '{file_name}' baixado e verificado com sucesso! Threads usadas: {len(threads)} (tier {tier})",
             "SUCCESS",
         )
+        log(f"Tempo total: {duration:.2f} segundos. Velocidade média: {rate_str}.", "INFO")
 
         for f in os.listdir(temp_dir):
             os.remove(os.path.join(temp_dir, f))
